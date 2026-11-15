@@ -1,6 +1,7 @@
 """Render music through a dialogue-driven spectral EQ."""
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 import math
@@ -59,14 +60,27 @@ def audio_format(path):
     return int(streams[0]["sample_rate"]), int(streams[0]["channels"])
 
 
-def decode(path, raw_path, rate, channels):
+@contextmanager
+def decoded(path, raw_path, rate, channels):
     audio_command(
         "ffmpeg", "-v", "error", "-xerror", "-i", str(path), "-map", "0:a:0",
-        "-ar", str(rate), "-f", "f32le", str(raw_path),
+        "-ar", str(rate), "-ac", str(channels), "-f", "f32le", str(raw_path),
     )
     if raw_path.stat().st_size == 0:
         raise ValueError(f"{path.name} has no audio samples.")
-    return np.memmap(raw_path, mode="r", dtype="<f4").reshape(-1, channels)
+    samples = np.memmap(raw_path, mode="r", dtype="<f4").reshape(-1, channels)
+    try:
+        yield samples
+    finally:
+        # Windows cannot remove a temporary file while it is mapped.
+        samples._mmap.close()
+
+
+def write_float_wav(raw_path, output, rate, channels):
+    audio_command(
+        "ffmpeg", "-v", "error", "-f", "f32le", "-ar", str(rate), "-ac", str(channels),
+        "-i", str(raw_path), "-c:a", "pcm_f32le", "-rf64", "auto", str(output),
+    )
 
 
 def frame_batch(samples, start, count, size, hop):
@@ -79,7 +93,8 @@ def frame_batch(samples, start, count, size, hop):
     return np.lib.stride_tricks.sliding_window_view(block, size, axis=0)[::hop].swapaxes(1, 2)
 
 
-def render_pcm(music, dialogue, rate, settings, raw_output, progress, *, observe_cuts=None):
+def render_pcm(music, dialogue, rate, settings, raw_output, progress, *,
+               observe_cuts=None, clip_baseline=None):
     size = 1 << max(4, round(math.log2(rate * 0.043)))
     hop = size // 4
     overlap = size - hop
@@ -103,6 +118,7 @@ def render_pcm(music, dialogue, rate, settings, raw_output, progress, *, observe
         for first in range(0, frame_count, 128):
             count = min(128, frame_count - first)
             start = first * hop - overlap
+            center = start + size // 2
             voice = frame_batch(dialogue, start, count + len(attack_weights), size, hop)
             spectrum = np.fft.rfft(voice * window[None, :, None], axis=1)
             # Channel-averaged power
@@ -110,7 +126,13 @@ def render_pcm(music, dialogue, rate, settings, raw_output, progress, *, observe
             level = amplitude * bin_scale / DIALOGUE_REFERENCE
             # Dialogue target in dB
             dialogue_target = (10 / math.log(10)) * np.log1p(level ** 2)
-            extra_targets = np.maximum(dialogue_target - settings.soften_db, 0) * settings.influence
+            baseline = settings.soften_db
+            if clip_baseline is not None:
+                # The clip envelope is already present in the PCM. Account for
+                # it in the target without applying that attenuation twice.
+                times = (center + hop * np.arange(len(dialogue_target))) * (1000 / rate)
+                baseline = baseline + clip_baseline(times)[:, None]
+            extra_targets = np.maximum(dialogue_target - baseline, 0) * settings.influence
 
             cuts = np.empty_like(extra_targets[:count])
             for index, target in enumerate(extra_targets[:count]):
@@ -127,7 +149,6 @@ def render_pcm(music, dialogue, rate, settings, raw_output, progress, *, observe
 
             cuts += settings.soften_db
             if observe_cuts is not None:
-                center = start + size // 2
                 observe_cuts(rate, size, hop, center, dialogue_target[:count], cuts)
 
             frames = frame_batch(music, start, count, size, hop)
@@ -148,19 +169,53 @@ def render_pcm(music, dialogue, rate, settings, raw_output, progress, *, observe
             progress("Applying dynamic EQ…", min(0.94, 0.16 + 0.78 * (first + count) / frame_count))
 
 
+def validate_output(output_path, sources, overwrite):
+    output_path = Path(output_path).expanduser().absolute()
+    if output_path.suffix.lower() != ".wav":
+        raise ValueError("Choose a .wav output filename.")
+    if output_path.resolve() in sources:
+        raise ValueError("Choose an output filename separate from the source tracks.")
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(f"Output already exists: {output_path}")
+    return output_path
+
+
+def commit_output(temporary, output, overwrite):
+    if overwrite:
+        os.replace(temporary, output)
+    else:
+        os.link(temporary, output)
+
+
+def silence_outside(raw_path, channels, rate, spans):
+    """Keep gaps silent even when a spectral window straddles a clip edge."""
+    stride = channels * 4
+    zero = memoryview(bytes(1024 * 1024))
+    limit = raw_path.stat().st_size
+
+    def clear(stream, start, end):
+        if start < end:
+            stream.seek(start)
+            while start < end:
+                count = min(end - start, len(zero))
+                stream.write(zero[:count])
+                start += count
+
+    cursor = 0
+    with raw_path.open("r+b") as stream:
+        for start, end in sorted(spans):
+            clear(stream, cursor, min(limit, round(start * rate / 1000) * stride))
+            cursor = max(cursor, round(end * rate / 1000) * stride)
+        clear(stream, cursor, limit)
+
+
 def render(music_path, dialogue_path, output_path, settings, *,
-           overwrite=False, progress=None, observe_cuts=None):
+           overwrite=False, progress=None, observe_cuts=None, music_spans=None, clip_baseline=None):
     settings.validate()
     progress = progress or (lambda stage, fraction: None)
     music_path = Path(music_path).expanduser().resolve(strict=True)
     dialogue_path = Path(dialogue_path).expanduser().resolve(strict=True)
-    output_path = Path(output_path).expanduser().absolute()
-    if output_path.suffix.lower() != ".wav":
-        raise ValueError("Choose a .wav output filename.")
-    if output_path.resolve() in (music_path, dialogue_path):
-        raise ValueError("Choose an output filename separate from the source tracks.")
-    if output_path.exists() and not overwrite:
-        raise FileExistsError(f"Output already exists: {output_path}")
+    output_path = validate_output(output_path, (music_path, dialogue_path), overwrite)
 
     progress("Reading source tracks…", 0.02)
     rate, channels = audio_format(music_path)
@@ -169,23 +224,20 @@ def render(music_path, dialogue_path, output_path, settings, *,
         raise ValueError("Use a mono or stereo music track.")
     with tempfile.TemporaryDirectory(prefix="music-ducking-") as work:
         work = Path(work)
-        music = decode(music_path, work / "music.raw", rate, channels)
-        dialogue = decode(dialogue_path, work / "dialogue.raw", rate, voice_channels)
         raw_output = work / "ducked.raw"
-        render_pcm(music, dialogue, rate, settings, raw_output, progress, observe_cuts=observe_cuts)
+        with (decoded(music_path, work / "music.raw", rate, channels) as music,
+              decoded(dialogue_path, work / "dialogue.raw", rate, voice_channels) as dialogue):
+            render_pcm(music, dialogue, rate, settings, raw_output, progress,
+                       observe_cuts=observe_cuts, clip_baseline=clip_baseline)
+
+        if music_spans is not None:
+            silence_outside(raw_output, channels, rate, music_spans)
 
         progress("Saving the music WAV…", 0.95)
         with tempfile.TemporaryDirectory(dir=output_path.parent, prefix=".ducking-") as staging:
             temporary = Path(staging) / "music.wav"
-            audio_command(
-                "ffmpeg", "-v", "error", "-y", "-f", "f32le", "-ar", str(rate),
-                "-ac", str(channels), "-i", str(raw_output),
-                "-c:a", "pcm_f32le", str(temporary),
-            )
-            if overwrite:
-                os.replace(temporary, output_path)
-            else:
-                os.link(temporary, output_path)
+            write_float_wav(raw_output, temporary, rate, channels)
+            commit_output(temporary, output_path, overwrite)
 
     progress("Export complete.", 1.0)
     return output_path

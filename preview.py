@@ -1,12 +1,13 @@
 """Preview preparation and playback."""
 
 from dataclasses import dataclass
-import json
+import shutil
 import subprocess
 
 import numpy as np
 
-from duck_music import audio_command, render
+from duck_music import audio_command
+from timeline_audio import assemble, render_timeline_music, stem_channels
 
 
 MUSIC_VOLUME = 45
@@ -18,15 +19,17 @@ MAX_GRAPH_HZ = 20000
 class EQTrace:
     frequencies: np.ndarray
     frame_interval: float
-    frames: np.ndarray
-    soften_db: float = 0
+    dialogue_target: np.ndarray
+    clip_cuts: dict[int, np.ndarray]
+    soften_db: float
 
 
 class EQTraceBuilder:
     """Preview EQ curve sampling."""
 
-    def __init__(self):
-        self.frames = []
+    def __init__(self, *, capture_dialogue):
+        self.dialogue_frames = [] if capture_dialogue else None
+        self.cut_frames = []
         self.frequencies = None
 
     def record(self, rate, size, hop, center, dialogue_target, cuts):
@@ -45,37 +48,55 @@ class EQTraceBuilder:
         indices = center // hop + np.arange(len(cuts))
         rows = (indices >= 0) & (indices % self.stride == 0)
         if np.any(rows):
-            self.frames.append(np.stack([
-                np.maximum.reduceat(series[rows, self.bins], self.starts, axis=1)
-                for series in (dialogue_target, cuts)
-            ], axis=1))
+            def sample(series):
+                return np.maximum.reduceat(series[rows, self.bins], self.starts, axis=1)
 
-    def finish(self, soften_db=0):
-        return EQTrace(self.frequencies, self.interval, np.concatenate(self.frames, axis=0), soften_db)
+            self.cut_frames.append(sample(cuts))
+            if self.dialogue_frames is not None:
+                self.dialogue_frames.append(sample(dialogue_target))
 
 
-def prepare_preview(music, dialogue, settings, work, progress):
-    ducked = work / "ducked.wav"
-    trace = EQTraceBuilder()
-    render(music, dialogue, ducked, settings, overwrite=True,
-           progress=lambda stage, fraction: progress(stage, fraction * 0.8),
-           observe_cuts=trace.record)
-    info = json.loads(audio_command(
-        "ffprobe", "-v", "error", "-select_streams", "a:0",
-        "-show_entries", "format=duration:stream=channels", "-of", "json", str(ducked),
-    ))
-    duration = float(info["format"]["duration"])
+def prepare_timeline_preview(clips, settings, work, progress):
+    folder = work / "session"
+    if folder.exists():
+        shutil.rmtree(folder)
+    folder.mkdir()
+    stems = assemble(clips, folder, lambda stage, fraction: progress(stage, fraction * .26))
+    ducked = folder / "ducked.wav"
+    traces = []
+
+    def observe_layer(layer):
+        builder = EQTraceBuilder(capture_dialogue=not traces)
+        traces.append((layer, builder))
+        return builder.record
+
+    render_timeline_music(clips, stems, folder, ducked, settings, observe_layer=observe_layer,
+                          progress=lambda stage, fraction: progress(stage, .26 + fraction * .56))
+    clip_cuts = {}
+    for layer, builder in traces:
+        if layer:
+            cuts = np.concatenate(builder.cut_frames)
+            clip_cuts.update((clip.key, cuts) for clip in layer)
+    first = traces[0][1]
+    trace = EQTrace(first.frequencies, first.interval, np.concatenate(first.dialogue_frames),
+                    clip_cuts, settings.soften_db)
+    tracks = preview_tracks(stems["Music"], stems["Dialogue"], ducked, settings.soften_db,
+                            stem_channels(clips, "Music"), folder, progress)
+    return tracks, trace
+
+
+def preview_tracks(music, dialogue, ducked, soften_db, channels, work, progress):
     # Unity-gain mono upmix
-    music_layout = ("pan=stereo|FL=c0|FR=c0" if info["streams"][0]["channels"] == 1
+    music_layout = ("pan=stereo|FL=c0|FR=c0" if channels == 1
                     else "aformat=channel_layouts=stereo")
 
     progress("Preparing preview audio…", 0.82)
     original = music
-    if settings.soften_db:
+    if soften_db:
         original = work / "original.wav"
         audio_command(
             "ffmpeg", "-v", "error", "-y", "-i", str(music), "-map", "0:a:0",
-            "-af", f"volume=-{settings.soften_db}dB", "-c:a", "pcm_f32le", str(original),
+            "-af", f"volume=-{soften_db}dB", "-c:a", "pcm_f32le", "-rf64", "auto", str(original),
         )
 
     tracks = {}
@@ -87,11 +108,11 @@ def prepare_preview(music, dialogue, settings, work, progress):
             f"[0:a:0]{music_layout}[m];"
             "[1:a:0]aformat=channel_layouts=stereo[d];"
             f"[m][d]amix=duration=first:normalize=0,volume={MUSIC_VOLUME / 100}[out]",
-            "-map", "[out]", "-t", str(duration), "-c:a", "pcm_f32le", str(mix),
+            "-map", "[out]", "-c:a", "pcm_f32le", "-rf64", "auto", str(mix),
         )
         tracks[mode, False] = source
         tracks[mode, True] = mix
-    return duration, tracks, trace.finish(settings.soften_db)
+    return tracks
 
 
 def play(path, position, with_dialogue):
