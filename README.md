@@ -32,7 +32,7 @@ The EQ is frequency matched: each frequency bin in the music responds to dialogu
 
 ## Export
 
-Click **Export Music WAV…** and choose where to save the result. The save dialog starts in the project's `out` folder when it exists. The exported WAV contains the processed music **without dialogue**, so you can replace the music clip in your edit while keeping dialogue on its own track.
+Click **Export Music WAV…** and choose where to save the result. The save dialog starts in the project's `out` folder when it exists. The exported WAV contains the processed music **without dialogue**.
 
 The export preserves the music's duration, sample rate, and mono or stereo layout. It uses 32-bit float PCM and applies the same EQ curve to both stereo channels. WAV, AIFF, FLAC, MP3, and M4A inputs are supported through FFmpeg.
 
