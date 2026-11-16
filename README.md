@@ -11,6 +11,8 @@ The desktop app requires Python 3.10 or later with NumPy and Tkinter. FFmpeg, FF
 
 The timeline lives in memory. Export your stems before closing the app.
 
+When launched from a Git clone of this repository on `main`, the app checks GitHub in the background. If your copy is behind, click **GitHub update available…** for instructions. Close the app, run `git pull --ff-only origin main` in the project folder, and reopen it. For a ZIP download, download a fresh copy from GitHub to update.
+
 ## Build your timeline
 
 - Click **+ Add Dialogue…** or **+ Add Music…** on the corresponding track card and select one or more audio files. New files are appended to the end of that lane.
@@ -52,6 +54,7 @@ Press **Play** again after changing a setting or editing a clip to refresh the p
 - **Original** plays the music with its clip levels, fades, and volume points.
 - **Ducked** plays the dynamically processed music.
 - **Dialogue** toggles the dialogue in the preview mix. Turn it off to listen to the music alone.
+- At **Playback volume** 100%, the preview plays both stems at their rendered levels. Mono stems play at the same level in both stereo channels. The slider changes how loud you hear the preview and leaves the exported WAVs at their rendered levels.
 - **Play** starts or pauses at the playhead. Press Space when the timeline has keyboard focus.
 - The graph follows playback and scrubbing. The **dashed** line shows the dialogue target by frequency. The **green** line shows the total attenuation for the music clip at the playhead, including its volume, fades, and volume points. **Ducked** also shows the additional EQ cut. Overlapping clips can have separate green curves.
 

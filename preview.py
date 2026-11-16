@@ -10,9 +10,9 @@ from duck_music import audio_command
 from timeline_audio import assemble, render_timeline_music, stem_channels
 
 
-MUSIC_VOLUME = 45
 MIN_GRAPH_HZ = 20
 MAX_GRAPH_HZ = 20000
+MONO_TO_STEREO = "pan=stereo|FL=c0|FR=c0"
 
 
 @dataclass(frozen=True)
@@ -81,14 +81,17 @@ def prepare_timeline_preview(clips, settings, work, progress):
     trace = EQTrace(first.frequencies, first.interval, np.concatenate(first.dialogue_frames),
                     clip_cuts, settings.soften_db)
     tracks = preview_tracks(stems["Music"], stems["Dialogue"], ducked, settings.soften_db,
-                            stem_channels(clips, "Music"), folder, progress)
+                            stem_channels(clips, "Music"), stem_channels(clips, "Dialogue"),
+                            folder, progress)
     return tracks, trace
 
 
-def preview_tracks(music, dialogue, ducked, soften_db, channels, work, progress):
-    # Unity-gain mono upmix
-    music_layout = ("pan=stereo|FL=c0|FR=c0" if channels == 1
-                    else "aformat=channel_layouts=stereo")
+def preview_tracks(music, dialogue, ducked, soften_db, music_channels, dialogue_channels,
+                   work, progress):
+    # Copy mono stems to both speakers without applying a center-channel reduction.
+    stereo = "aformat=channel_layouts=stereo"
+    music_layout = MONO_TO_STEREO if music_channels == 1 else stereo
+    dialogue_layout = MONO_TO_STEREO if dialogue_channels == 1 else stereo
 
     progress("Preparing preview audio…", 0.82)
     original = music
@@ -106,8 +109,8 @@ def preview_tracks(music, dialogue, ducked, soften_db, channels, work, progress)
             "ffmpeg", "-v", "error", "-y", "-i", str(source), "-i", str(dialogue),
             "-filter_complex",
             f"[0:a:0]{music_layout}[m];"
-            "[1:a:0]aformat=channel_layouts=stereo[d];"
-            f"[m][d]amix=duration=first:normalize=0,volume={MUSIC_VOLUME / 100}[out]",
+            f"[1:a:0]{dialogue_layout}[d];"
+            "[m][d]amix=inputs=2:duration=first:normalize=0[out]",
             "-map", "[out]", "-c:a", "pcm_f32le", "-rf64", "auto", str(mix),
         )
         tracks[mode, False] = source
@@ -115,11 +118,12 @@ def preview_tracks(music, dialogue, ducked, soften_db, channels, work, progress)
     return tracks
 
 
-def play(path, position, with_dialogue):
+def play(path, position, *, mono=False, volume=100):
+    layout = ["-af", MONO_TO_STEREO] if mono else []
     try:
         return subprocess.Popen(
             ["ffplay", "-loglevel", "error", "-nodisp", "-autoexit", "-vn", "-sn", "-ast", "a:0",
-             "-volume", str(100 if with_dialogue else MUSIC_VOLUME),
+             "-volume", str(volume), *layout,
              "-ss", f"{position:.6f}", "-i", str(path)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             text=True,

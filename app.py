@@ -17,7 +17,10 @@ from timeline import (
     ACCENT, BG, BLUE, BORDER, LAVENDER, MUTED, PANEL, SURFACE, TEXT,
     Timeline, clock, parse_time,
 )
-from timeline_audio import Clip, clip_amplitude, duration_of, export_timeline, inspect_asset, level_text
+from timeline_audio import (
+    Clip, clip_amplitude, duration_of, export_timeline, inspect_asset, level_text, stem_channels,
+)
+from updates import github_commits_behind
 from visualizer import CutVisualizer
 
 PROJECT = Path(__file__).resolve().parent
@@ -66,6 +69,11 @@ def theme(root):
                     borderwidth=0, arrowsize=13)
     style.map("TScrollbar", background=[("active", "#91a9c8")])
     style.configure("Horizontal.TProgressbar", background=ACCENT, thickness=3)
+    style.configure("Playback.Horizontal.TScale", background=ACCENT, troughcolor="#28504e",
+                    sliderlength=22, arrowsize=20, gripcount=0, bordercolor=BORDER,
+                    lightcolor=ACCENT, darkcolor=BG)
+    style.map("Playback.Horizontal.TScale", background=[("active", TEXT)],
+              bordercolor=[("focus", TEXT)])
     style.configure("Title.TLabel", font=("TkDefaultFont", 23, "bold"))
     style.configure("Heading.TLabel", font=("TkDefaultFont", 13, "bold"))
     style.configure("Muted.TLabel", foreground=MUTED)
@@ -105,10 +113,14 @@ class MusicDucking:
         self.redo_stack = []
         self.position = 0
         self.player = None
+        self.player_volume = 100
+        self.volume_timer = None
         self.play_started = 0
         self.resume_after_scrub = False
         self.status = tk.StringVar(value="Add dialogue or music to get started.")
         self.progress = tk.DoubleVar()
+        self.playback_volume = tk.DoubleVar(value=100)
+        self.volume_label = tk.StringVar(value="100%")
         defaults = Settings()
         self.influence = tk.DoubleVar(value=100 * defaults.influence)
         self.attack = tk.DoubleVar(value=defaults.attack_ms)
@@ -162,12 +174,17 @@ class MusicDucking:
             root.bind("<Command-Shift-Z>", self.redo)
         self.update_controls()
         root.after(42, self.tick)
+        self.check_github_updates()
 
     def build_header(self, shell):
         title = ttk.Frame(shell)
         title.grid(row=0, column=0, sticky="ew", pady=(0, 13))
         title.columnconfigure(0, weight=1)
-        ttk.Label(title, text=APP_NAME, style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        heading = ttk.Frame(title)
+        heading.grid(row=0, column=0, sticky="w")
+        ttk.Label(heading, text=APP_NAME, style="Title.TLabel").pack(side="left")
+        self.update_button = ttk.Button(heading, text="GitHub update available…",
+                                        style="Transport.TButton")
         ttk.Label(title, text="Arrange your audio and shape the music around the dialogue.",
                   style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(2, 0))
         self.export_button = ttk.Button(title, text="Export Music WAV…", style="Primary.TButton",
@@ -176,6 +193,34 @@ class MusicDucking:
         self.dialogue_export = ttk.Button(title, text="Export Dialogue WAV…",
                                           command=lambda: self.export("Dialogue"))
         self.dialogue_export.grid(row=0, column=1, rowspan=2)
+
+    def check_github_updates(self):
+        result = Queue(maxsize=1)
+
+        def check():
+            result.put(github_commits_behind(PROJECT))
+
+        def show_result():
+            try:
+                count = result.get_nowait()
+            except Empty:
+                self.root.after(250, show_result)
+                return
+            if count:
+                self.update_button.configure(command=lambda: self.show_update_instructions(count))
+                self.update_button.pack(side="left", padx=(12, 0))
+
+        Thread(target=check, daemon=True).start()
+        self.root.after(250, show_result)
+
+    def show_update_instructions(self, count):
+        messagebox.showinfo(
+            "GitHub update available",
+            f"GitHub has {count} newer {'commit' if count == 1 else 'commits'}.\n\n"
+            "Export any work you need to keep, then close the app and run this in the project folder:\n\n"
+            f"git pull --ff-only origin main\n\n{PROJECT}\n\nThen reopen the app.",
+            parent=self.root,
+        )
 
     def build_transport(self, shell):
         bar = ttk.Frame(shell)
@@ -266,7 +311,7 @@ class MusicDucking:
         audition = ttk.Frame(lower)
         audition.grid(row=0, column=1, sticky="nsew")
         audition.columnconfigure(0, weight=1)
-        audition.rowconfigure(1, weight=1)
+        audition.rowconfigure(2, weight=1)
         toolbar = ttk.Frame(audition)
         toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 3))
         ttk.Label(toolbar, text="Preview EQ", style="Heading.TLabel").pack(side="left", padx=(0, 9))
@@ -279,9 +324,20 @@ class MusicDucking:
         voice = labeled_toggle(toolbar, "Dialogue", self.hear_dialogue, self.switch_preview)
         voice.pack(side="right")
         self.editor_controls.append(voice)
+
+        monitor = ttk.Frame(audition)
+        monitor.grid(row=1, column=0, sticky="ew", pady=(0, 5))
+        monitor.columnconfigure(1, weight=1)
+        ttk.Label(monitor, text="Playback volume").grid(row=0, column=0, sticky="w")
+        volume = ttk.Scale(monitor, from_=0, to=100, variable=self.playback_volume,
+                           style="Playback.Horizontal.TScale", command=self.change_playback_volume)
+        volume.grid(row=0, column=1, sticky="ew", padx=(10, 8))
+        ttk.Label(monitor, textvariable=self.volume_label, width=5, anchor="e",
+                  style="Time.TLabel").grid(row=0, column=2)
+
         self.visualizer = CutVisualizer(audition)
         self.visualizer.configure(height=150, width=440)
-        self.visualizer.grid(row=1, column=0, sticky="nsew")
+        self.visualizer.grid(row=2, column=0, sticky="nsew")
 
     @property
     def duration(self):
@@ -544,16 +600,40 @@ class MusicDucking:
         else:
             self.set_position(self.position)
 
-    def start_player(self):
+    def change_playback_volume(self, value):
+        volume = round(float(value))
+        self.volume_label.set(f"{volume}%")
+        self.cancel_volume_timer()
+        if self.player is not None and volume != self.player_volume:
+            # Coalesce drag events before reopening the already-rendered preview.
+            self.volume_timer = self.root.after(120, self.apply_playback_volume)
+
+    def cancel_volume_timer(self):
+        if self.volume_timer is not None:
+            self.root.after_cancel(self.volume_timer)
+            self.volume_timer = None
+
+    def apply_playback_volume(self):
+        self.volume_timer = None
+        if self.player is not None and self.player.poll() is None:
+            follow = self.timeline.follow_playhead
+            self.stop_player()
+            if self.position < self.duration:
+                self.start_player(follow=follow)
+
+    def start_player(self, *, follow=True):
         mode = self.mode.get()
         voice = self.hear_dialogue.get()
         position = self.position if self.position < self.duration else 0
         if self.visualizer.trace is not self.preview_trace:
             self.visualizer.set_trace(self.preview_trace)
-        self.timeline.follow_playhead = True
-        self.set_position(position, follow=True)
+        self.timeline.follow_playhead = follow
+        self.set_position(position, follow=follow)
         try:
-            self.player = play(self.tracks[mode, voice], position / 1000, voice)
+            mono = not voice and stem_channels(self.clips, "Music") == 1
+            volume = round(self.playback_volume.get())
+            self.player = play(self.tracks[mode, voice], position / 1000, mono=mono, volume=volume)
+            self.player_volume = volume
         except (OSError, RuntimeError) as error:
             self.status.set(f"Playback failed. {error}")
             return
@@ -562,6 +642,7 @@ class MusicDucking:
         self.status.set(f"Playing {mode.lower()} preview {'with' if voice else 'without'} dialogue.")
 
     def stop_player(self):
+        self.cancel_volume_timer()
         if self.player is None:
             return
         position = self.current_position()
