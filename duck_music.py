@@ -109,9 +109,10 @@ def render_pcm(music, dialogue, rate, settings, raw_output, progress, *,
     release = np.float32(math.exp(-hop / (rate * settings.release_ms / 1000))
                          if settings.release_ms else 0)
     hold_frames = round(rate * settings.release_ms / (3000 * hop))
-    hold = np.zeros(len(bin_scale), dtype=np.int32)
-    envelope = np.zeros_like(bin_scale)
-    tail = np.zeros((overlap, music.shape[1]), dtype=np.float32)
+    channels = music.shape[1]
+    hold = np.zeros((len(bin_scale), channels), dtype=np.int32)
+    envelope = np.zeros_like(hold, dtype=np.float32)
+    tail = np.zeros((overlap, channels), dtype=np.float32)
     frame_count = (len(music) + overlap + hop - 1) // hop
 
     with raw_output.open("wb") as output:
@@ -121,22 +122,26 @@ def render_pcm(music, dialogue, rate, settings, raw_output, progress, *,
             center = start + size // 2
             voice = frame_batch(dialogue, start, count + len(attack_weights), size, hop)
             spectrum = np.fft.rfft(voice * window[None, :, None], axis=1)
-            # Channel-averaged power
-            amplitude = np.sqrt(np.mean(np.abs(spectrum) ** 2, axis=2)).astype(np.float32)
-            level = amplitude * bin_scale / DIALOGUE_REFERENCE
+            amplitude = np.abs(spectrum)
+            if channels == 1 and dialogue.shape[1] > 1:
+                # A mono stem has one EQ curve, driven by the combined dialogue power.
+                amplitude = np.sqrt(np.mean(amplitude ** 2, axis=2, keepdims=True))
+            level = amplitude.astype(np.float32) * bin_scale[:, None] / DIALOGUE_REFERENCE
             # Dialogue target in dB
             dialogue_target = (10 / math.log(10)) * np.log1p(level ** 2)
+            if channels == 2 and dialogue_target.shape[2] == 1:
+                dialogue_target = np.broadcast_to(dialogue_target, (*dialogue_target.shape[:2], 2))
             baseline = settings.soften_db
             if clip_baseline is not None:
                 # The clip envelope is already present in the PCM. Account for
                 # it in the target without applying that attenuation twice.
                 times = (center + hop * np.arange(len(dialogue_target))) * (1000 / rate)
-                baseline = baseline + clip_baseline(times)[:, None]
+                baseline = baseline + clip_baseline(times)[:, None, None]
             extra_targets = np.maximum(dialogue_target - baseline, 0) * settings.influence
 
             cuts = np.empty_like(extra_targets[:count])
             for index, target in enumerate(extra_targets[:count]):
-                # Per-bin hold and release
+                # Independent hold and release for every bin and output channel.
                 rising = target >= envelope
                 coefficient = np.where(rising, np.float32(0), np.where(hold > 0, np.float32(1), release))
                 envelope = target + coefficient * (envelope - target)
@@ -154,13 +159,13 @@ def render_pcm(music, dialogue, rate, settings, raw_output, progress, *,
             frames = frame_batch(music, start, count, size, hop)
             spectrum = np.fft.rfft(frames * window[None, :, None], axis=1)
             gain = 10 ** (-cuts / 20)
-            frames = np.fft.irfft(spectrum * gain[:, :, None], n=size, axis=1)
+            frames = np.fft.irfft(spectrum * gain, n=size, axis=1)
             frames = frames.astype(np.float32) * synthesis[None, :, None]
-            block = np.zeros((count * hop + overlap, music.shape[1]), dtype=np.float32)
+            block = np.zeros((count * hop + overlap, channels), dtype=np.float32)
             block[:overlap] = tail
             for offset in range(0, size, hop):
                 block[offset:offset + count * hop] += frames[:, offset:offset + hop].reshape(
-                    -1, music.shape[1]
+                    -1, channels
                 )
             tail = block[count * hop:].copy()
             block[max(0, -start):min(count * hop, len(music) - start)].astype(
@@ -222,6 +227,8 @@ def render(music_path, dialogue_path, output_path, settings, *,
     _, voice_channels = audio_format(dialogue_path)
     if channels not in (1, 2):
         raise ValueError("Use a mono or stereo music track.")
+    if channels == 2:
+        voice_channels = min(voice_channels, 2)
     with tempfile.TemporaryDirectory(prefix="music-ducking-") as work:
         work = Path(work)
         raw_output = work / "ducked.raw"

@@ -126,6 +126,7 @@ class MusicDucking:
         self.attack = tk.DoubleVar(value=defaults.attack_ms)
         self.smoothness = tk.DoubleVar(value=defaults.release_ms)
         self.mode = tk.StringVar(value="Ducked")
+        self.channel_mode = tk.IntVar(value=-1)
         self.hear_dialogue = tk.BooleanVar(value=True)
         self.snap = tk.BooleanVar(value=True)
         self.beats = tk.BooleanVar(value=False)
@@ -334,6 +335,14 @@ class MusicDucking:
         volume.grid(row=0, column=1, sticky="ew", padx=(10, 8))
         ttk.Label(monitor, textvariable=self.volume_label, width=5, anchor="e",
                   style="Time.TLabel").grid(row=0, column=2)
+        self.channel_controls = ttk.Frame(monitor)
+        self.channel_controls.grid(row=0, column=3, padx=(12, 0))
+        ttk.Label(self.channel_controls, text="Channel").pack(side="left", padx=(0, 5))
+        for channel, label in ((-1, "Both"), (0, "Left"), (1, "Right")):
+            choice = ttk.Radiobutton(self.channel_controls, text=label, value=channel,
+                                     variable=self.channel_mode, style="Mode.TRadiobutton",
+                                     command=self.switch_channel)
+            choice.pack(side="left", padx=(0, 2))
 
         self.visualizer = CutVisualizer(audition)
         self.visualizer.configure(height=150, width=440)
@@ -524,6 +533,14 @@ class MusicDucking:
     def update_controls(self):
         idle = self.task is None
         self.timeline.enabled = idle
+        stereo = any(clip.asset.channels > 1 for clip in self.clips)
+        if stereo:
+            self.channel_controls.grid()
+        else:
+            self.channel_controls.grid_remove()
+            if self.channel_mode.get() != -1:
+                self.channel_mode.set(-1)
+                self.visualizer.set_channel(None)
         for widgets, enabled in [
             (self.editor_controls, idle),
             (self.clip_controls, idle and self.selected is not None),
@@ -600,6 +617,15 @@ class MusicDucking:
         else:
             self.set_position(self.position)
 
+    @property
+    def audition_channel(self):
+        channel = self.channel_mode.get()
+        return None if channel == -1 else channel
+
+    def switch_channel(self):
+        self.visualizer.set_channel(self.audition_channel)
+        self.switch_preview()
+
     def change_playback_volume(self, value):
         volume = round(float(value))
         self.volume_label.set(f"{volume}%")
@@ -632,7 +658,8 @@ class MusicDucking:
         try:
             mono = not voice and stem_channels(self.clips, "Music") == 1
             volume = round(self.playback_volume.get())
-            self.player = play(self.tracks[mode, voice], position / 1000, mono=mono, volume=volume)
+            self.player = play(self.tracks[mode, voice], position / 1000, mono=mono, volume=volume,
+                               channel=self.audition_channel)
             self.player_volume = volume
         except (OSError, RuntimeError) as error:
             self.status.set(f"Playback failed. {error}")

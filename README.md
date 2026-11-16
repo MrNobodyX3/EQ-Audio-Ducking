@@ -57,8 +57,11 @@ Press **Play** again after changing a setting or editing a clip to refresh the p
 - At **Playback volume** 100%, the preview plays both stems at their rendered levels. Mono stems play at the same level in both stereo channels. The slider changes how loud you hear the preview and leaves the exported WAVs at their rendered levels.
 - **Play** starts or pauses at the playhead. Press Space when the timeline has keyboard focus.
 - The graph follows playback and scrubbing. The **dashed** line shows the dialogue target by frequency. The **green** line shows the total attenuation for the music clip at the playhead, including its volume, fades, and volume points. **Ducked** also shows the additional EQ cut. Overlapping clips can have separate green curves.
+- With stereo audio, **Channel** offers **Both**, **Left**, and **Right**. Left and Right solo that side of the preview and show its EQ curve. In Both, distinct right-side cuts use a dashed green line. Channel selection leaves both sides of the export intact.
 
 The EQ is frequency matched. Each frequency bin in the music responds to dialogue energy in that same range after dialogue levels, fades, and volume points are applied. The cut uses the remaining gap between the clip’s current attenuation and the dialogue target. The target uses a fixed −56 dBFS per-bin reference and is smoothed near silence. Lookahead eases cuts in ahead of peaks, while Release shapes the return after them.
+
+Stereo music ducks independently on each side. Left dialogue drives left music and right dialogue drives right music, each with its own EQ and timing envelope. Mono dialogue drives both sides equally. Mono music stays mono and uses the combined dialogue power for its single EQ curve. The desktop and command-line exporters both use these rules.
 
 ## Export
 

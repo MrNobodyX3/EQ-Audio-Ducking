@@ -118,8 +118,13 @@ def preview_tracks(music, dialogue, ducked, soften_db, music_channels, dialogue_
     return tracks
 
 
-def play(path, position, *, mono=False, volume=100):
-    layout = ["-af", MONO_TO_STEREO] if mono else []
+def play(path, position, *, mono=False, volume=100, channel=None):
+    filters = [MONO_TO_STEREO] if mono else []
+    if channel == 0:
+        filters.append("pan=stereo|FL=FL|FR=0*FR")
+    elif channel == 1:
+        filters.append("pan=stereo|FL=0*FL|FR=FR")
+    layout = ["-af", ",".join(filters)] if filters else []
     try:
         return subprocess.Popen(
             ["ffplay", "-loglevel", "error", "-nodisp", "-autoexit", "-vn", "-sn", "-ast", "a:0",

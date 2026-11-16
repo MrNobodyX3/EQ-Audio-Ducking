@@ -3,6 +3,8 @@
 from math import ceil, inf, isfinite, log10
 import tkinter as tk
 
+import numpy as np
+
 from preview import MAX_GRAPH_HZ, MIN_GRAPH_HZ
 from timeline import ACCENT, BEAT, BORDER, GRID, MUTED, PANEL, TEXT
 
@@ -16,6 +18,7 @@ class CutVisualizer(tk.Canvas):
         self.message = "Press Play to see the EQ curves."
         self.position = 0
         self.ducked = True
+        self.channel = None
         self.music_levels = {}
         self.trace_peak = 0
         self.drawn_frame = None
@@ -84,6 +87,10 @@ class CutVisualizer(tk.Canvas):
         self.music_levels = music_levels
         self.draw()
 
+    def set_channel(self, channel):
+        self.channel = channel
+        self.draw()
+
     def draw(self):
         if self.winfo_width() < 440 or self.winfo_height() < 145:
             self.delete("all")
@@ -92,25 +99,31 @@ class CutVisualizer(tk.Canvas):
         trace = self.trace
         index = (min(round(self.position / trace.frame_interval), len(trace.dialogue_target) - 1)
                  if trace is not None else None)
+        channels = (0,)
+        if trace is not None and trace.dialogue_target.shape[-1] == 2:
+            channels = (0, 1) if self.channel is None else (self.channel,)
         music = tuple(
             (key, round(-20 * log10(level), 2) if level > 0 else inf)
             for key, level in self.music_levels.items()
         )
-        frame = index, self.ducked, music
+        frame = index, channels, self.ducked, music
         if self.x_positions is not None and self.drawn_frame == frame:
             return
         cuts = []
         peak = self.trace_peak
         for key, baseline in music:
             if trace is None:
-                values = (baseline, baseline)
+                curves = ((baseline, baseline),)
             elif self.ducked and key in trace.clip_cuts:
-                values = baseline + trace.clip_cuts[key][index]
+                curves = tuple(baseline + trace.clip_cuts[key][index, :, channel] for channel in channels)
             else:
-                values = (baseline + trace.soften_db,) * len(trace.frequencies)
-            if isfinite(baseline):
-                peak = max(peak, min(MAX_VISIBLE_CUT - 1, float(max(values, default=0))))
-            cuts.append(values)
+                curves = ((baseline + trace.soften_db,) * len(trace.frequencies),)
+            for side, values in enumerate(curves):
+                if side and np.array_equal(values, curves[0]):
+                    continue
+                if isfinite(baseline):
+                    peak = max(peak, min(MAX_VISIBLE_CUT - 1, float(max(values, default=0))))
+                cuts.append((side, values))
 
         step = (6 if peak < 30 else 12 if peak < 60 else 24)
         depth = max(24, step * ceil((peak + 1) / step))
@@ -120,12 +133,16 @@ class CutVisualizer(tk.Canvas):
         self.drawn_frame = frame
         self.delete("curve")
         if trace is not None and len(trace.frequencies) >= 2:
-            target = [(x, self.y(value)) for x, value in zip(self.x_positions, trace.dialogue_target[index])]
-            self.create_line(target, fill=BEAT, width=2, dash=(4, 3), tags="curve")
-        for values in cuts:
+            targets = tuple(trace.dialogue_target[index, :, channel] for channel in channels)
+            for side, values in enumerate(targets):
+                if side and np.array_equal(values, targets[0]):
+                    continue
+                target = [(x, self.y(value)) for x, value in zip(self.x_positions, values)]
+                self.create_line(target, fill=BEAT, width=2, dash=(1, 3) if side else (4, 3), tags="curve")
+        for side, values in cuts:
             points = [(x, self.y(value)) for x, value in zip(self.x_positions, values)]
             if len(points) >= 2:
-                self.create_line(points, fill=ACCENT, width=2.5, tags="curve")
+                self.create_line(points, fill=ACCENT, width=2.5, dash=(5, 3) if side else (), tags="curve")
         if any(baseline == inf for _, baseline in music):
             self.create_text(self.left - 7, self.y(inf), text="−∞", anchor="e",
                              fill=MUTED, tags="curve")
