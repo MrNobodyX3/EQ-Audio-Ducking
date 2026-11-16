@@ -7,7 +7,9 @@ EQ Audio Ducking makes room for dialogue by lowering the music at the frequencie
 - **macOS:** double-click [`start-mac.command`](start-mac.command).
 - **Windows:** double-click [`start-win.bat`](start-win.bat).
 
-The desktop app requires Python 3.10 or later with NumPy and Tkinter. FFmpeg, FFprobe, and FFplay must be on `PATH`. On Windows, the launcher looks for `py` or `python` in Command Prompt.
+The desktop app requires Python 3.10 or later with NumPy and Tkinter. Install the Python dependency with `python3 -m pip install -r requirements.txt` on macOS or `py -3 -m pip install -r requirements.txt` on Windows. FFmpeg, FFprobe, and FFplay must be on `PATH`. On Windows, the launcher looks for `py` or `python` in Command Prompt.
+
+Download the latest source ZIP from the [GitHub Releases](https://github.com/MrNobodyX3/EQ-Audio-Ducking/releases) page. It includes the Mac and Windows launchers; FFmpeg remains a separate install.
 
 Use **Save Project** or **⌘S** on macOS / **Ctrl+S** on Windows to save your timeline as an `.eqduck` project. **Open Project…** or **⌘O** / **Ctrl+O** restores it, including the clips, trims, fades, volume points, EQ settings, and snap options. The project file references the original audio files; files beside the project are stored as relative paths, while files elsewhere keep their full paths. Keep those audio files available when reopening the project. The app prompts you to save unsaved edits before loading another project or closing.
 

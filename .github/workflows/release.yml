@@ -1,0 +1,34 @@
+name: Create GitHub release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build downloadable source archive
+        run: |
+          archive="EQ-Audio-Ducking-${GITHUB_REF_NAME}.zip"
+          git archive --format=zip --prefix="EQ-Audio-Ducking-${GITHUB_REF_NAME}/" \
+            --output "$archive" "$GITHUB_REF_NAME"
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - name: Publish release and attach archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ARCHIVE" \
+            --verify-tag \
+            --title "EQ Audio Ducking $GITHUB_REF_NAME" \
+            --notes-file RELEASE_NOTES.md
