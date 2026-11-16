@@ -27,12 +27,13 @@ Drag the volume line up or down to set the clip level. The bottom mutes the clip
 | Volume action | macOS | Windows |
 | --- | --- | --- |
 | Add a point on the line | Option-click or double-click | Alt-click or double-click |
-| Drag with finer control | Hold Shift | Hold Shift |
+| Drag the line with finer control | Hold Shift | Hold Shift |
+| Move a point in time without changing volume | Shift-drag the diamond | Shift-drag the diamond |
 | Snap a volume drag to 1 dB | Hold ⌘ | Hold Ctrl |
 | Snap a volume drag to 0.1 dB | Hold ⌘ + Shift | Hold Ctrl + Shift |
 | Adjust the whole clip when it has points | Option + Shift-drag | Alt + Shift-drag |
 
-Drag a diamond to change its time or level. Right-click a diamond to remove it. From the volume line’s right-click menu, **Reset Section to Clip Level** returns both endpoints to the clip’s base level. **Reset Clip Volume** restores the original level and clears all points.
+Drag a diamond to change its time or level. Double-click a diamond to remove it, or choose **Remove Volume Point** from its right-click menu. From the volume line’s right-click menu, **Reset Section to Clip Level** returns both endpoints to the clip’s base level. **Reset Clip Volume** restores the original level and clears all points.
 
 Drag the gold handle at the left or right end of a clip inward to set a fade. Right-click a handle to pick a curve by its thumbnail. Zoom in if a short clip is too narrow to show its handles. Volume resets preserve the fades. Use **Undo** and **Redo** to revisit clip edits.
 

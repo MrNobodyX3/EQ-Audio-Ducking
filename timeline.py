@@ -37,7 +37,6 @@ ROW = 56
 SHIFT = 0x0001
 CONTROL = 0x0004
 COMMAND = 0x0008
-OPTION = 0x0010  # Mod2 on macOS
 
 
 def clock(ms, decimals=3):
@@ -136,7 +135,6 @@ class Timeline(ttk.Frame):
                                  "8.7a0") < 0
         self.legacy_aqua = windowing == "aqua" and legacy_tk
         self.zoom_modifiers = CONTROL | (COMMAND if windowing == "aqua" else 0)
-        self.point_modifier = OPTION if self.aqua else 0x0008  # Alt/Mod1 elsewhere
         self.volume_snap_modifier = COMMAND if self.aqua else CONTROL
         self.active = None
         self.position = 0
@@ -187,6 +185,10 @@ class Timeline(ttk.Frame):
         ]
         if windowing == "x11" and legacy_tk:
             bindings.extend((f"<Button-{button}>", self.wheel) for button in (4, 5, 6, 7))
+        # Let Tk resolve Option/Alt. On Windows, Mod1 reports Num Lock.
+        point_key = "Option" if self.aqua else "Alt"
+        bindings.append((f"<{point_key}-Button-1>",
+                         lambda event: self.press(event, volume_modifier=True)))
         if self.aqua:
             bindings.append(("<Control-Button-1>", self.clip_menu))
         for event, handler in bindings:
@@ -693,7 +695,7 @@ class Timeline(ttk.Frame):
                                       "gain": "sb_v_double_arrow", "point": "fleur",
                                       "move": "fleur"}.get(mode, ""))
 
-    def press(self, event):
+    def press(self, event, *, volume_modifier=False):
         if not self.enabled or self.pan_origin is not None:
             return
         self.refresh_hit_targets()
@@ -715,8 +717,8 @@ class Timeline(ttk.Frame):
             mode, index = mode
         seed = None
         section = None
-        whole_clip = event.state & self.point_modifier and event.state & SHIFT
-        if event.state & self.point_modifier and not whole_clip and mode == "gain":
+        whole_clip = volume_modifier and event.state & SHIFT
+        if volume_modifier and not whole_clip and mode == "gain":
             seed = self.clip_with_point(clip, event.x)
             if seed != clip:
                 mode = "point"
@@ -729,7 +731,7 @@ class Timeline(ttk.Frame):
                      "origin": event.x, "x": event.x, "origin_y": event.y, "y": event.y,
                      "index": index, "volume": self.volume_hit.get(clip.key),
                      "seed": seed, "section": section, "state": event.state,
-                     "volume_travel": 0.0, "moved": False}
+                     "volume_modifier": volume_modifier, "volume_travel": 0.0, "moved": False}
         self.queue_draw()
 
     def volume_section(self, clip, x):
@@ -752,6 +754,9 @@ class Timeline(ttk.Frame):
         if not clip.source_in < source < clip.source_out or any(t == source for t, _ in clip.points):
             return clip
         return self.with_volume_endpoints(clip, (source,), (float(point_level(clip, source)),))
+
+    def clip_without_point(self, clip, index):
+        return replace(clip, points=clip.points[:index] + clip.points[index + 1:])
 
     def fade_icon(self, curve, mode, selected):
         key = curve, mode, selected
@@ -789,8 +794,7 @@ class Timeline(ttk.Frame):
             if isinstance(mode, tuple):
                 index = mode[1]
                 menu.add_command(label="Remove Volume Point",
-                                 command=lambda: self.edit(replace(
-                                     clip, points=clip.points[:index] + clip.points[index + 1:])))
+                                 command=lambda: self.edit(self.clip_without_point(clip, index)))
             elif clip.length > 1:
                 menu.add_command(label="Add Volume Point",
                                  command=lambda: self.edit(self.clip_with_point(clip, event.x)))
@@ -903,9 +907,14 @@ class Timeline(ttk.Frame):
             if index + 1 < len(clip.points):
                 high = min(high, clip.points[index + 1][0] - 1)
             source = min(high, max(low, original + delta))
-            level = bounded_level(old_level + change)
-            if step and level != old_level:
-                level = snap_volume(level, step)
+            if finer and not step:
+                # Keep the current level when Shift is pressed mid-drag.
+                level = self.pending.points[index][1] if self.pending else old_level
+                drag["volume_travel"] = (level - old_level) * (floor_y - ceiling)
+            else:
+                level = bounded_level(old_level + change)
+                if step and level != old_level:
+                    level = snap_volume(level, step)
             self.pending = replace(clip, points=(*clip.points[:index], (source, level),
                                                 *clip.points[index + 1:]))
         else:
@@ -954,22 +963,29 @@ class Timeline(ttk.Frame):
 
     def release(self, event):
         if self.scrub_origin is not None:
+            self.last_volume_click = None
             self.scrub_origin = None
             self.scrub("end", self.time(event.x))
             return
         if not self.drag:
+            self.last_volume_click = None
             return
         pending = self.pending
-        original = self.drag["clip"]
-        if not self.drag["moved"] and self.drag["mode"] in ("gain", "section"):
+        drag = self.drag
+        original, mode = drag["clip"], drag["mode"]
+        if not drag["moved"] and not drag["volume_modifier"] and mode in ("gain", "section", "point"):
+            point_index = drag["index"] if mode == "point" else None
+            point_time = original.points[point_index][0] if point_index is not None else None
+            target = original.key, point_time
             previous = self.last_volume_click
             now = monotonic()
-            if (previous and previous[0] == original.key and now - previous[1] <= .45
+            if (previous and previous[0] == target and now - previous[1] <= .45
                     and abs(event.x - previous[2]) <= 5 and abs(event.y - previous[3]) <= 5):
-                pending = self.clip_with_point(original, event.x)
+                pending = (self.clip_with_point(original, event.x) if point_index is None
+                           else self.clip_without_point(original, point_index))
                 self.last_volume_click = None
             else:
-                self.last_volume_click = original.key, now, event.x, event.y
+                self.last_volume_click = target, now, event.x, event.y
         else:
             self.last_volume_click = None
         offset = self.offset
