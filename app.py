@@ -441,7 +441,7 @@ class MusicDucking:
                             if self.snap.get() else "Grid, clip edge, and playhead snapping are off.")
         elif self.beats.get():
             if any(clip.asset.beats for clip in self.clips if clip.lane == "Music"):
-                self.status.set("Beats on · Gold guides mark beats. Drag or trim an edge to snap.")
+                self.status.set("Beats on · Gold guides mark the estimated beat grid. Drag or trim an edge to snap.")
             else:
                 self.status.set("Beats on · Guides appear on music with a detectable rhythm.")
         else:

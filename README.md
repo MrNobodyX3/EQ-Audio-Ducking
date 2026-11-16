@@ -16,7 +16,7 @@ The timeline lives in memory. Export your stems before closing the app.
 - Click **+ Add Dialogue…** or **+ Add Music…** on the corresponding track card and select one or more audio files. New files are appended to the end of that lane.
 - Drag a waveform to move the clip. Drag its edges to trim it or recover trimmed audio. Overlapping clips in the same track are summed.
 - For exact timing, select a clip and enter **Start**, **Source in**, or **Source out** in seconds or `m:ss.mmm`. Click **Apply Timing** or press Enter. Use **Remove**, Delete, or Backspace to remove the selected clip.
-- **Snap** aligns clips with the ruler grid, playhead, and other clip edges. **Beat Snap** shows gold beat markers on music and snaps clip edges to those markers. Beat detection runs on import. Music with a weak or irregular rhythm may show few markers.
+- **Snap** aligns clips with the ruler grid, playhead, and other clip edges. **Beat Snap** shows a gold beat grid on music and snaps clip edges to it. The detector runs on import and adjusts beat spacing as the tempo changes. Quiet intros and outros use the tempo of the nearest tracked beats. Music without a detectable rhythm may have no grid.
 - Click or drag the ruler to move the playhead. If the preview was playing, it resumes from the new position.
 - Pan with two fingers, **Shift + scroll**, or a middle-button drag. Pinch over the timeline on a Mac trackpad to zoom around the pointer. You can also use **⌘ + scroll** on macOS, **Ctrl + scroll** on Windows, or the **−**, **+**, and **Fit** buttons.
 
@@ -75,4 +75,4 @@ Run `python3 -B duck_music.py --help` to see all options. The command-line inter
 
 ## License and credits
 
-This project is released under the [MIT License](LICENSE). The beat detector is implemented in this project using NumPy, drawing on Daniel P. W. Ellis’s description of [beat tracking with dynamic programming](https://www.ee.columbia.edu/~dpwe/pubs/Ellis07-beattrack.pdf). FFmpeg is an external executable and is not bundled with this project.
+This project is released under the [MIT License](LICENSE). The beat detector is implemented in NumPy using ideas from [beat tracking with dynamic programming](https://www.ee.columbia.edu/~dpwe/pubs/Ellis07-beattrack.pdf) and [tracking with local tempo estimates](https://arxiv.org/abs/2308.10355). FFmpeg is an external executable and is not bundled with this project.
