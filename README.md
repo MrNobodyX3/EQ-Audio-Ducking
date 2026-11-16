@@ -9,7 +9,7 @@ EQ Audio Ducking makes room for dialogue by lowering the music at the frequencie
 
 The desktop app requires Python 3.10 or later with NumPy and Tkinter. FFmpeg, FFprobe, and FFplay must be on `PATH`. On Windows, the launcher looks for `py` or `python` in Command Prompt.
 
-The timeline lives in memory. Export your stems before closing the app.
+Use **Save Project** or **⌘S** on macOS / **Ctrl+S** on Windows to save your timeline as an `.eqduck` project. **Open Project…** or **⌘O** / **Ctrl+O** restores it, including the clips, trims, fades, volume points, EQ settings, and snap options. The project file references the original audio files; files beside the project are stored as relative paths, while files elsewhere keep their full paths. Keep those audio files available when reopening the project. The app prompts you to save unsaved edits before loading another project or closing.
 
 When launched from a Git clone of this repository on `main`, the app checks GitHub in the background. If your copy is behind, click **GitHub update available…** for instructions. Close the app, run `git pull --ff-only origin main` in the project folder, and reopen it. For a ZIP download, download a fresh copy from GitHub to update.
 

@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from duck_music import MAX_TIMING_MS, Settings
+from project_file import load_project, save_project
 from preview import play, prepare_timeline_preview
 from timeline import (
     ACCENT, BG, BLUE, BORDER, LAVENDER, MUTED, PANEL, SURFACE, TEXT,
@@ -109,6 +110,8 @@ class MusicDucking:
         self.clips = ()
         self.active = None
         self.next_key = 0
+        self.project_path = None
+        self.project_dirty = False
         self.undo_stack = []
         self.redo_stack = []
         self.position = 0
@@ -173,6 +176,12 @@ class MusicDucking:
         if root.tk.call("tk", "windowingsystem") == "aqua":
             root.bind("<Command-z>", self.undo)
             root.bind("<Command-Shift-Z>", self.redo)
+            root.bind("<Command-s>", self.save_project_shortcut)
+            root.bind("<Command-o>", self.open_project_shortcut)
+        else:
+            root.bind("<Control-s>", self.save_project_shortcut)
+            root.bind("<Control-o>", self.open_project_shortcut)
+        self.update_project_title()
         self.update_controls()
         root.after(42, self.tick)
         self.check_github_updates()
@@ -184,6 +193,12 @@ class MusicDucking:
         heading = ttk.Frame(title)
         heading.grid(row=0, column=0, sticky="w")
         ttk.Label(heading, text=APP_NAME, style="Title.TLabel").pack(side="left")
+        files = ttk.Frame(heading)
+        files.pack(side="left", padx=(14, 0))
+        self.open_project_button = ttk.Button(files, text="Open Project…", command=self.open_project)
+        self.open_project_button.pack(side="left", padx=(0, 5))
+        self.save_project_button = ttk.Button(files, text="Save Project", command=self.save_project)
+        self.save_project_button.pack(side="left")
         self.update_button = ttk.Button(heading, text="GitHub update available…",
                                         style="Transport.TButton")
         ttk.Label(title, text="Arrange your audio and shape the music around the dialogue.",
@@ -382,6 +397,71 @@ class MusicDucking:
 
         self.start_task("import", import_clips)
 
+    def update_project_title(self):
+        name = self.project_path.name if self.project_path else "Untitled Project"
+        self.root.title(f"{name}{' •' if self.project_dirty else ''} — {APP_NAME}")
+
+    def mark_project_dirty(self):
+        self.project_dirty = True
+        self.update_project_title()
+
+    def save_project_shortcut(self, _event=None):
+        self.save_project()
+        return "break"
+
+    def open_project_shortcut(self, _event=None):
+        self.open_project()
+        return "break"
+
+    def save_project(self):
+        path = self.project_path
+        if path is None:
+            chosen = filedialog.asksaveasfilename(
+                parent=self.root, title="Save Project", defaultextension=".eqduck",
+                filetypes=[("EQ Audio Ducking Project", "*.eqduck"), ("JSON Project", "*.json")],
+            )
+            if not chosen:
+                return False
+            path = Path(chosen)
+        try:
+            saved = save_project(
+                path, self.clips, self.request()[1], snap=self.snap.get(), beats=self.beats.get(),
+                zoom=self.timeline.zoom, offset=self.timeline.offset, mode=self.mode.get(),
+                channel=self.channel_mode.get(), hear_dialogue=self.hear_dialogue.get(),
+                active=self.active,
+            )
+        except (OSError, ValueError, TypeError) as error:
+            messagebox.showerror("Could not save project", str(error), parent=self.root)
+            return False
+        self.project_path = saved
+        self.project_dirty = False
+        self.update_project_title()
+        self.status.set(f"Project saved · {saved.name}")
+        return True
+
+    def confirm_discard(self):
+        if not self.project_dirty:
+            return True
+        answer = messagebox.askyesnocancel(
+            "Unsaved project", "Save changes to this project before continuing?", parent=self.root
+        )
+        if answer is None:
+            return False
+        return self.save_project() if answer else True
+
+    def open_project(self):
+        if not self.confirm_discard():
+            return
+        chosen = filedialog.askopenfilename(
+            parent=self.root, title="Open Project",
+            filetypes=[("EQ Audio Ducking Project", "*.eqduck *.json"), ("All files", "*")],
+        )
+        if not chosen:
+            return
+        path = Path(chosen)
+        self.pending_project_path = path
+        self.start_task("load", lambda progress: load_project(path, progress))
+
     def add_assets(self, lane, assets, errors):
         if assets:
             added = []
@@ -459,9 +539,11 @@ class MusicDucking:
         self.redo_stack.clear()
         self.restore(clips, active)
 
-    def restore(self, clips, active):
+    def restore(self, clips, active, *, dirty=True):
         self.stop_player()
         self.clips = clips
+        if dirty:
+            self.mark_project_dirty()
         self.invalidate("Press Play to hear the updated timeline." if clips else
                         "Add dialogue or music to get started.")
         self.select_clip(active)
@@ -501,6 +583,7 @@ class MusicDucking:
         self.timeline.snap = self.snap.get()
         self.timeline.beats = self.beats.get()
         self.timeline.queue_draw()
+        self.mark_project_dirty()
         if changed is self.snap:
             self.status.set("Snap on · Align to clip edges, the playhead, or the ruler grid."
                             if self.snap.get() else "Grid, clip edge, and playhead snapping are off.")
@@ -514,6 +597,7 @@ class MusicDucking:
 
     def settings_changed(self, number, label, display):
         label.set(display.format(float(number)))
+        self.mark_project_dirty()
         if self.clips:
             self.stop_player()
             self.invalidate("Press Play to hear the updated EQ.")
@@ -542,6 +626,7 @@ class MusicDucking:
                 self.channel_mode.set(-1)
                 self.visualizer.set_channel(None)
         for widgets, enabled in [
+            ([self.open_project_button, self.save_project_button], idle),
             (self.editor_controls, idle),
             (self.clip_controls, idle and self.selected is not None),
             ([self.play_button], idle and bool(self.clips)),
@@ -611,6 +696,7 @@ class MusicDucking:
         self.start_task("preview", prepare)
 
     def switch_preview(self):
+        self.mark_project_dirty()
         if self.player is not None:
             self.stop_player()
             self.start_player()
@@ -623,6 +709,7 @@ class MusicDucking:
         return None if channel == -1 else channel
 
     def switch_channel(self):
+        self.mark_project_dirty()
         self.visualizer.set_channel(self.audition_channel)
         self.switch_preview()
 
@@ -730,7 +817,8 @@ class MusicDucking:
         self.update_controls()
         self.progress.set(0)
         self.progressbar.grid()
-        self.status.set({"import": "Reading audio files…", "preview": "Preparing preview…",
+        self.status.set({"import": "Reading audio files…", "load": "Loading project audio…",
+                         "preview": "Preparing preview…",
                          "export": "Preparing timeline export…"}[name])
         Thread(target=self.run_task, args=(action,)).start()
         self.root.after(60, self.poll_task)
@@ -769,6 +857,34 @@ class MusicDucking:
                 messagebox.showerror(f"{task.title()} failed", data, parent=self.root)
             elif task == "import":
                 self.add_assets(*data)
+            elif task == "load":
+                clips, settings, editor = data
+                self.stop_player()
+                self.influence.set(settings.influence * 100)
+                self.attack.set(settings.attack_ms)
+                self.smoothness.set(settings.release_ms)
+                self.snap.set(editor["snap"])
+                self.beats.set(editor["beats"])
+                self.timeline.snap = self.snap.get()
+                self.timeline.beats = self.beats.get()
+                self.mode.set(editor["mode"])
+                self.channel_mode.set(editor["channel"])
+                self.hear_dialogue.set(editor["hear_dialogue"])
+                self.undo_stack.clear()
+                self.redo_stack.clear()
+                active = editor.get("active")
+                if active not in {clip.key for clip in clips}:
+                    active = clips[0].key if clips else None
+                self.restore(clips, active, dirty=False)
+                self.next_key = max((clip.key for clip in clips), default=0)
+                self.timeline.zoom = max(0.25, min(64, float(editor["zoom"])))
+                self.timeline.offset = max(0, float(editor["offset"]))
+                self.timeline.queue_draw()
+                self.project_path = self.pending_project_path
+                self.project_dirty = False
+                self.update_project_title()
+                self.status.set(f"Project loaded · {self.project_path.name}")
+                self.update_controls()
             elif task == "preview":
                 self.preview_request, self.tracks, self.preview_trace = data
                 self.start_player()
@@ -794,6 +910,8 @@ class MusicDucking:
     def close(self):
         if self.task is not None:
             messagebox.showinfo("Working", "Wait for the current operation to finish.", parent=self.root)
+            return
+        if not self.confirm_discard():
             return
         self.stop_player()
         self.work.cleanup()
